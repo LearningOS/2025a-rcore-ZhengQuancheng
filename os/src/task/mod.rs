@@ -45,6 +45,8 @@ pub struct TaskManagerInner {
     tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
     current_task: usize,
+    /// syscall counts
+    syscall_counts: [[usize; MAX_SYSCALL_NUM]; MAX_APP_NUM],
 }
 
 lazy_static! {
@@ -54,7 +56,6 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
-            syscall_counts: [0; MAX_SYSCALL_NUM], // !! clear
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -66,6 +67,7 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    syscall_counts: [[0; MAX_SYSCALL_NUM]; MAX_APP_NUM],
                 })
             },
         }
@@ -173,14 +175,16 @@ pub fn exit_current_and_run_next() {
 
 /// Get the syscall count of current task
 pub fn get_syscall_count(syscall_id: usize) -> usize {
+    assert!(syscall_id < MAX_SYSCALL_NUM);
     let inner = TASK_MANAGER.inner.exclusive_access();
     let current = inner.current_task;
-    inner.tasks[current].syscall_counts[syscall_id]
+    inner.syscall_counts[current][syscall_id]
 }
 
 /// Increase the syscall count of current task by 1
 pub fn inc_syscall_count(syscall_id: usize) {
+    assert!(syscall_id < MAX_SYSCALL_NUM);
     let mut inner = TASK_MANAGER.inner.exclusive_access();
     let current = inner.current_task;
-    inner.tasks[current].syscall_counts[syscall_id] += 1;
+    inner.syscall_counts[current][syscall_id] += 1;
 }
