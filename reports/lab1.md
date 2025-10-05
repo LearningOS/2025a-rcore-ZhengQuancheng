@@ -61,7 +61,7 @@
 - TrapContext 和 TaskContext 有啥区别?
   - TrapContext 中保存 Task 陷入 S Mode 前 CPU 的状态; TaskContext 中保存在 S Mode 下进行 Trap 处理过程中调用 __switch 之前的 CPU 状态.
   - 当 __switch 恢复 TaskContext 之后会继续处理 Trap, __restore 恢复 TrapContext 后则回到 User Mode 继续执行 Task.
-  - Task 切换由编译器辅助完成, 其中 s0~s11、ra 为 Callee Saved 寄存器, 被调函数 __switch 需要保存和恢复这些寄存器的值. 而其他寄存器则无需保存, 或由调用者保存(编译器辅助完成). 故 TaskContext 包含 s0~s11、ra, 除此之外还包含 sp, 其保存 Task 内核栈的栈顶.
+  - Task 切换由编译器辅助完成, 其中 s0...s11、ra 为 Callee Saved 寄存器, 被调函数 __switch 需要保存和恢复这些寄存器的值. 而其他寄存器则无需保存, 或由调用者保存(编译器辅助完成). 故 TaskContext 包含 s0...s11、ra, 除此之外还包含 sp, 其保存 Task 内核栈的栈顶.
   - __switch 可看作函数, 与普通函数不同之处在于其可换(Task的内核)栈
 - 进入 __restore 时 sp 指向什么内容？为什么一定会恰好指向此？
   - 调用流程1：从 trap_handler 返回. 
