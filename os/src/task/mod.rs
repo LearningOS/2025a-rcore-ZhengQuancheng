@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::VirtAddr;
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -153,6 +154,46 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Check if the current task can read the given address
+    fn check_addr_readable(&self, addr: usize) -> bool {
+        // 获取当前 task
+        let inner = self.inner.exclusive_access();
+        let curr = inner.current_task;
+        let vpn = VirtAddr::from(addr).floor();
+        // 检查 addr 在当前 task 的内存映射是否有效
+        if let Some(pte) = inner.tasks[curr].memory_set.translate(vpn) {
+            return pte.is_valid();
+        }
+        false
+    }
+    /// Check if the current task can write to the given address
+    fn check_addr_writable(&self, addr: usize) -> bool {
+        // 获取当前 task
+        let inner = self.inner.exclusive_access();
+        let curr = inner.current_task;
+        // 将虚拟地址转换为虚拟页号
+        let vpn = VirtAddr::from(addr).floor();
+        // 检查 addr 在当前 task 的内存映射是否有效并且可写
+        if let Some(pte) = inner.tasks[curr].memory_set.translate(vpn) {
+            return pte.is_valid() && pte.writable();
+        }
+        false
+    }
+    /// Get the count of a specific syscall
+    fn get_syscall_count(&self, syscall_id: usize) -> usize {
+        let inner = self.inner.exclusive_access();
+        let curr = inner.current_task;
+        let count = inner.tasks[curr].syscall_counter.get(&syscall_id).unwrap_or(&0);
+        *count
+    }
+    /// Increase the count of a specific syscall by 1
+    fn inc_syscall_count(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let curr = inner.current_task;
+        let count = inner.tasks[curr].syscall_counter.entry(syscall_id).or_insert(0);
+        *count += 1;
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +242,24 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Check if the current task can read the given address
+pub fn check_addr_readable(addr: usize) -> bool {
+    TASK_MANAGER.check_addr_readable(addr)
+}
+
+/// Check if the current task can write to the given address
+pub fn check_addr_writable(addr: usize) -> bool {
+    TASK_MANAGER.check_addr_writable(addr)
+}
+
+/// Get the count of a specific syscall
+pub fn get_syscall_count(syscall_id: usize) -> usize {
+    TASK_MANAGER.get_syscall_count(syscall_id)
+}
+
+/// Increase the count of a specific syscall by 1
+pub fn inc_syscall_count(syscall_id: usize) {
+    TASK_MANAGER.inc_syscall_count(syscall_id);
 }

@@ -1,8 +1,8 @@
 //! Process management syscalls
 use crate::{
-    mm::translated_byte_buffer,
-    timer::get_time_us,
-    task::{change_program_brk, current_user_token, exit_current_and_run_next, suspend_current_and_run_next}
+    mm::translated_byte_buffer, 
+    task::{change_program_brk, check_addr_readable, check_addr_writable, current_user_token, exit_current_and_run_next, get_syscall_count, suspend_current_and_run_next}, 
+    timer::get_time_us
 };
 
 #[repr(C)]
@@ -64,7 +64,30 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
 /// HINT: You might reimplement it with virtual memory management.
 pub fn sys_trace(_trace_request: usize, _id: usize, _data: usize) -> isize {
     trace!("kernel: sys_trace");
-    -1
+    match _trace_request {
+        0 => {
+            if !check_addr_readable(_id) {
+                return -1;
+            }
+            let bufs = translated_byte_buffer(current_user_token(), _id as *const u8, 1);
+            bufs[0][0] as isize
+        }
+        1 => {
+            if !check_addr_writable(_id) {
+                return -1;
+            }
+            let mut bufs = translated_byte_buffer(current_user_token(), _id as *mut u8, 1);
+            bufs[0][0] = _data as u8;
+            0
+        }
+        2 => {
+            get_syscall_count(_id) as isize
+        }
+        _ => {
+            trace!("sys_trace: invalid trace_request {}", _trace_request);
+            -1
+        }
+    }
 }
 
 // YOUR JOB: Implement mmap.
