@@ -180,14 +180,14 @@ impl TaskManager {
         }
         false
     }
-    /// Get the count of a specific syscall
+    /// Get the current task's count of a specific syscall
     fn get_syscall_count(&self, syscall_id: usize) -> usize {
         let inner = self.inner.exclusive_access();
         let curr = inner.current_task;
         let count = inner.tasks[curr].syscall_counter.get(&syscall_id).unwrap_or(&0);
         *count
     }
-    /// Increase the count of a specific syscall by 1
+    /// Increase the current task's count of a specific syscall by 1
     fn inc_syscall_count(&self, syscall_id: usize) {
         let mut inner = self.inner.exclusive_access();
         let curr = inner.current_task;
@@ -254,12 +254,12 @@ pub fn check_addr_writable(addr: usize) -> bool {
     TASK_MANAGER.check_addr_writable(addr)
 }
 
-/// Get the count of a specific syscall
+/// Get the current task's count of a specific syscall
 pub fn get_syscall_count(syscall_id: usize) -> usize {
     TASK_MANAGER.get_syscall_count(syscall_id)
 }
 
-/// Increase the count of a specific syscall by 1
+/// Increase the current task's count of a specific syscall by 1
 pub fn inc_syscall_count(syscall_id: usize) {
     TASK_MANAGER.inc_syscall_count(syscall_id);
 }
