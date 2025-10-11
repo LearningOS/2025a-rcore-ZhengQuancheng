@@ -15,7 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
-use crate::mm::VirtAddr;
+use crate::mm::{MapPermission, VirtAddr};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -163,7 +163,7 @@ impl TaskManager {
         let vpn = VirtAddr::from(addr).floor();
         // 检查 addr 在当前 task 的内存映射是否有效
         if let Some(pte) = inner.tasks[curr].memory_set.translate(vpn) {
-            return pte.is_valid();
+            return pte.is_valid() && pte.readable() && pte.user(); // PTE_U !!! ch4_trace1.rs:17
         }
         false
     }
@@ -176,7 +176,7 @@ impl TaskManager {
         let vpn = VirtAddr::from(addr).floor();
         // 检查 addr 在当前 task 的内存映射是否有效并且可写
         if let Some(pte) = inner.tasks[curr].memory_set.translate(vpn) {
-            return pte.is_valid() && pte.writable();
+            return pte.is_valid() && pte.writable() && pte.user(); // PTE_U !!! ch4_trace1.rs:17
         }
         false
     }
@@ -193,6 +193,21 @@ impl TaskManager {
         let curr = inner.current_task;
         let count = inner.tasks[curr].syscall_counter.entry(syscall_id).or_insert(0);
         *count += 1;
+    }
+    /// Map memory page for the current task
+    fn map_pages(&self, sva: VirtAddr, eva: VirtAddr, perm: MapPermission) -> bool {
+        let mut inner = self.inner.exclusive_access();
+        let curr = inner.current_task;
+        let mset = &mut inner.tasks[curr].memory_set;
+        mset.map_pages(sva, eva, perm)
+    }
+    /// Unmap memory page for the current task
+    #[allow(unused)]
+    fn unmap_pages(&self, sva: VirtAddr, eva: VirtAddr) -> bool {
+        let mut inner = self.inner.exclusive_access();
+        let curr = inner.current_task;
+        let mset = &mut inner.tasks[curr].memory_set;
+        mset.unmap_pages(sva, eva)
     }
 }
 
@@ -262,4 +277,14 @@ pub fn get_syscall_count(syscall_id: usize) -> usize {
 /// Increase the current task's count of a specific syscall by 1
 pub fn inc_syscall_count(syscall_id: usize) {
     TASK_MANAGER.inc_syscall_count(syscall_id);
+}
+
+/// Map memory page for the current task
+pub fn map_pages(sva: VirtAddr, eva: VirtAddr, perm: MapPermission) -> bool {
+    TASK_MANAGER.map_pages(sva, eva, perm)
+}
+
+/// Unmap memory page for the current task
+pub fn unmap_pages(sva: VirtAddr, eva: VirtAddr) -> bool {
+    TASK_MANAGER.unmap_pages(sva, eva)
 }

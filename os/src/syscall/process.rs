@@ -1,7 +1,8 @@
 //! Process management syscalls
 use crate::{
-    mm::translated_byte_buffer, 
-    task::{change_program_brk, check_addr_readable, check_addr_writable, current_user_token, exit_current_and_run_next, get_syscall_count, suspend_current_and_run_next}, 
+    config::PAGE_SIZE, 
+    mm::{translated_byte_buffer, MapPermission, VirtAddr}, 
+    task::{change_program_brk, check_addr_readable, check_addr_writable, current_user_token, exit_current_and_run_next, get_syscall_count, map_pages, unmap_pages, suspend_current_and_run_next}, 
     timer::get_time_us
 };
 
@@ -92,14 +93,55 @@ pub fn sys_trace(_trace_request: usize, _id: usize, _data: usize) -> isize {
 
 // YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
-    -1
+    trace!("kernel: sys_mmap");
+    // 检查 start 是否页对齐
+    if _start % PAGE_SIZE != 0 {
+        return -1;
+    }
+    // 检查 len 是否符合要求
+    if _len == 0 {
+        return 0;
+    }
+    // 检查权限是否合法
+    let mut perm = MapPermission::U;
+    if _port & !0b0111 != 0 { // 权限只能是 0b000 ~ 0b111
+        return -1;
+    }
+    if _port & 0b111 == 0 { // 权限不能全为 0, ch4_mmap3.rs:21
+        return -1;
+    }
+    if _port & 0b001 != 0 { // 可读取
+        perm |= MapPermission::R;
+    }
+    if _port & 0b010 != 0 { // 可写入
+        perm |= MapPermission::W;
+    }
+    if _port & 0b100 != 0 { // 可执行
+        perm |= MapPermission::X;
+    }
+    // 映射内存
+    let sva = VirtAddr::from(_start);
+    let eva = VirtAddr::from(_start + _len);
+    match map_pages(sva, eva, perm) {
+        true => 0,
+        false => -1,
+    } 
 }
 
 // YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
-    -1
+    trace!("kernel: sys_munmap");
+    // 检查 start 是否页对齐
+    if _start % PAGE_SIZE != 0 {
+        return -1;
+    }
+    // 取消映射内存
+    let sva = VirtAddr::from(_start);
+    let eva = VirtAddr::from(_start + _len);
+    match unmap_pages(sva, eva) {
+        true => 0,
+        false => -1,
+    }
 }
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {

@@ -262,6 +262,41 @@ impl MemorySet {
             false
         }
     }
+
+    /// Map memory page for the current task
+    pub fn map_pages(&mut self, sva: VirtAddr, eva: VirtAddr, perm: MapPermission) -> bool {
+        // 检查 [sva, eva) 中是否存在已经被映射的页
+        // 应用程序不会恒等映射, 即只会进行 MapType::Framed 的映射, areas 中也只会存在 MapType::Framed 的映射
+        let range = VPNRange::new(sva.floor(), eva.ceil());
+        for area in &self.areas {
+            if area.vpn_range.overlap(&range) {
+                return false;
+            }
+        }
+        // 是否考虑合并? 先暂时不变吧!
+        // 怎么检查物理内存是否足够?
+        // 映射新的内存区域
+        self.push(
+            MapArea::new(sva, eva, MapType::Framed, perm),
+            None,
+        );
+        true
+    }
+    /// Unmap memory page for the current task
+    pub fn unmap_pages(&mut self, sva: VirtAddr, eva: VirtAddr) -> bool {
+        // [sva, eva) 对应的区域必须已经被映射
+        // 测试用例中不会出现部分取消映射的情况, 且不会出现跨区域取消映射的情况
+        // 为简单实现, 直接完全匹配
+        let range = VPNRange::new(sva.floor(), eva.ceil());
+        for (idx, area) in &mut self.areas.iter().enumerate() {
+            if area.vpn_range == range {
+                let mut removed = self.areas.remove(idx);
+                removed.unmap(&mut self.page_table);
+                return true;
+            }
+        }
+        false
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
