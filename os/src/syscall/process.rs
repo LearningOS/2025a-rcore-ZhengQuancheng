@@ -33,7 +33,7 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
     // 获取当前时间
     let us = get_time_us();
-    let tv = TimeVal {
+    let tv = TimeVal { // ch3
         sec: us / 1_000_000,
         usec: us % 1_000_000,
     };
@@ -50,7 +50,7 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
             core::mem::size_of::<TimeVal>(),
         )
     };
-    // 将 src 拷贝分批到 bufs 中
+    // 将 src 分批次复制到 bufs 中
     let mut offset = 0;
     for buf in bufs {
         let len = core::cmp::min(buf.len(), src.len() - offset);
