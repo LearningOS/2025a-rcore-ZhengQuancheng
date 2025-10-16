@@ -2,12 +2,10 @@
 use alloc::sync::Arc;
 
 use crate::{
-    loader::get_app_data_by_name,
-    mm::{translated_refmut, translated_str},
-    task::{
-        add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next,
-    },
+    config::PAGE_SIZE, loader::get_app_data_by_name, 
+    mm::{ translated_byte_buffer, translated_refmut, translated_str, MapPermission, VirtAddr }, 
+    task::{ add_task, current_task, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, }, 
+    timer::get_time_us
 };
 
 #[repr(C)]
@@ -106,29 +104,91 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
+    trace!("kernel:pid[{}] sys_get_time", current_task().unwrap().pid.0);
+    // 获取当前时间
+    let us = get_time_us();
+    let tv = TimeVal { // ch3
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+    // 将应用地址空间中的一段缓冲区 _ts 转化为在内核地址空间直接读写的字节切片向量 bufs
+    let bufs = translated_byte_buffer(
+        current_user_token(),
+        _ts as *const u8,
+        core::mem::size_of::<TimeVal>()
     );
-    -1
+    // 将 tv 转为字节数组, 方便数据复制
+    let src = unsafe {
+        core::slice::from_raw_parts(
+            &tv as *const TimeVal as *const u8,
+            core::mem::size_of::<TimeVal>(),
+        )
+    };
+    // 将 src 分批次复制到 bufs 中
+    let mut offset = 0;
+    for buf in bufs {
+        let len = core::cmp::min(buf.len(), src.len() - offset);
+        buf[..len].copy_from_slice(&src[offset..offset + len]);
+        offset += len;
+    }
+    0
 }
 
 /// YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    trace!("kernel:pid[{}] sys_mmap", current_task().unwrap().pid.0);
+    // 检查 start 是否页对齐
+    if _start % PAGE_SIZE != 0 {
+        return -1;
+    }
+    // 检查 len 是否符合要求
+    if _len == 0 {
+        return 0;
+    }
+    // 检查权限是否合法
+    let mut perm = MapPermission::U;
+    if _port & !0b0111 != 0 { // 权限只能是 0b000 ~ 0b111
+        return -1;
+    }
+    if _port & 0b111 == 0 { // 权限不能全为 0, ch4_mmap3.rs:21
+        return -1;
+    }
+    if _port & 0b001 != 0 { // 可读取
+        perm |= MapPermission::R;
+    }
+    if _port & 0b010 != 0 { // 可写入
+        perm |= MapPermission::W;
+    }
+    if _port & 0b100 != 0 { // 可执行
+        perm |= MapPermission::X;
+    }
+    // 映射内存
+    let sva = VirtAddr::from(_start);
+    let eva = VirtAddr::from(_start + _len);
+    let task = current_task().unwrap();
+    let result = task.inner_exclusive_access().memory_set.map_pages(sva, eva, perm);
+    match result {
+        true => 0,
+        false => -1,
+    }
 }
 
 /// YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    trace!("kernel:pid[{}] sys_munmap", current_task().unwrap().pid.0);
+    // 检查 start 是否页对齐
+    if _start % PAGE_SIZE != 0 {
+        return -1;
+    }
+    // 取消映射内存
+    let sva = VirtAddr::from(_start);
+    let eva = VirtAddr::from(_start + _len);
+    let task = current_task().unwrap();
+    let result = task.inner_exclusive_access().memory_set.unmap_pages(sva, eva);
+    match result {
+        true => 0,
+        false => -1,
+    }
 }
 
 /// change data segment size

@@ -300,6 +300,33 @@ impl MemorySet {
             false
         }
     }
+    /// Map memory page for the current task
+    pub fn map_pages(&mut self, sva: VirtAddr, eva: VirtAddr, perm: MapPermission) -> bool {
+        // 检查 [sva, eva) 中是否存在已经被映射的页
+        let range = VPNRange::new(sva.floor(), eva.ceil());
+        for area in &self.areas {
+            if area.vpn_range.overlap(&range) {
+                return false;
+            }
+        }
+        // 映射新的内存区域
+        self.insert_framed_area(sva, eva, perm);
+        true
+    }
+    /// Unmap memory page for the current task
+    pub fn unmap_pages(&mut self, sva: VirtAddr, eva: VirtAddr) -> bool {
+        // [sva, eva) 对应的区域必须已经被映射
+        let range = VPNRange::new(sva.floor(), eva.ceil());
+        for (idx, area) in &mut self.areas.iter().enumerate() {
+            if area.vpn_range == range {
+                // 删除该区域
+                let mut removed = self.areas.remove(idx);
+                removed.unmap(&mut self.page_table);
+                return true;
+            }
+        }
+        false
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {

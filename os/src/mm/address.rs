@@ -204,7 +204,7 @@ impl StepByOne for VirtPageNum {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 /// a simple range structure for type T
 pub struct SimpleRange<T>
 where
@@ -213,6 +213,18 @@ where
     l: T,
     r: T,
 }
+
+// Check overlap
+impl<T> SimpleRange<T>
+where
+    T: StepByOne + Copy + PartialEq + PartialOrd + Debug,
+{
+    /// Check if two ranges overlap
+    pub fn overlap(&self, other: &Self) -> bool {
+        !(self.r <= other.l || other.r <= self.l)
+    }
+}
+
 impl<T> SimpleRange<T>
 where
     T: StepByOne + Copy + PartialEq + PartialOrd + Debug,
