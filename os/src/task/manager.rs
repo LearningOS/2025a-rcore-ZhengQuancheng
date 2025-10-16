@@ -1,5 +1,6 @@
 //!Implementation of [`TaskManager`]
 use super::TaskControlBlock;
+use crate::config::BIG_STRIDE;
 use crate::sync::UPSafeCell;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
@@ -23,7 +24,38 @@ impl TaskManager {
     }
     /// Take a process out of the ready queue
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
+        self.stride_scheduler()
+    }
+    /// fifo scheduler
+    #[allow(unused)]
+    fn fifo_scheduler(&mut self) -> Option<Arc<TaskControlBlock>> {
         self.ready_queue.pop_front()
+    }
+    /// stride scheduler
+    #[allow(unused)]
+    fn stride_scheduler(&mut self) -> Option<Arc<TaskControlBlock>> {
+        // 若果就绪队列为空, 返回 None
+        if self.ready_queue.is_empty() {
+            return None;
+        }
+        // 找到 stride 最小的进程
+        let mut min_index = 0;
+        let mut min_stride = self.ready_queue[0].inner_exclusive_access().stride;
+        for (i, task) in self.ready_queue.iter().enumerate() {
+            let task_inner = task.inner_exclusive_access();
+            // !!!!!!!!!!!!!!
+            if task_inner.stride.wrapping_sub(min_stride) <= BIG_STRIDE / 2 {
+                min_index = i;
+                min_stride = task_inner.stride;
+            }
+        }
+        // 从就绪队列中取出该进程, 并更新其 stride
+        let task = self.ready_queue.remove(min_index).unwrap();
+        {
+            let mut task_inner = task.inner_exclusive_access();
+            task_inner.stride = task_inner.stride.wrapping_add(BIG_STRIDE / task_inner.priority);
+        }
+        Some(task)
     }
 }
 
