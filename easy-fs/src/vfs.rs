@@ -183,4 +183,129 @@ impl Inode {
         });
         block_cache_sync_all();
     }
+
+    /// Inode id
+    pub fn inode_id(&self) -> u32 {
+        let fs = self.fs.lock();
+        let inode_size = core::mem::size_of::<DiskInode>();
+        let inodes_per_block = (super::BLOCK_SZ / inode_size) as u32;
+        let inode_id = (self.block_id - fs.get_inode_area_start_block() as usize) as u32 * inodes_per_block
+            + (self.block_offset / inode_size) as u32;
+        inode_id
+    }
+
+    /// Is directory?
+    pub fn is_dir(&self) -> bool {
+        self.read_disk_inode(|disk_inode| disk_inode.is_dir())
+    }
+
+    /// Count of links to this inode
+    pub fn link_count(&self, inode_id: u32) -> usize {
+        let _fs = self.fs.lock();
+        let mut count = 0;
+        self.read_disk_inode(|disk_inode| {
+            // assert it is a directory
+            assert!(disk_inode.is_dir());
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let mut dirent = DirEntry::empty();
+            for i in 0..file_count {
+                let _read = disk_inode.read_at(
+                    DIRENT_SZ * i,
+                    dirent.as_bytes_mut(),
+                    &self.block_device,
+                );
+                assert_eq!(_read, DIRENT_SZ);
+                if dirent.inode_id() == inode_id {
+                    count += 1;
+                }
+            }
+        });
+        count
+    }
+
+    /// Link a file under current inode
+    pub fn link(&self, old_name: &str, new_name: &str) -> bool {
+        let mut fs = self.fs.lock();
+        // 检查 old_name 是否存在. 若存在则获取其 inode_id.
+        let old_inode_id = match self.read_disk_inode(|disk_inode| {
+            // assert it is a directory
+            assert!(disk_inode.is_dir());
+            self.find_inode_id(old_name, disk_inode)
+        }) {
+            Some(id) => id,
+            None => return false,
+        };
+        // !!! 暂时不考虑 new_name 已存在的情况
+        // 添加新目录项
+        self.modify_disk_inode(|disk_inode| {
+            // 为新目录项增加存储空间. 注意, 务必先增加大小, 再写入新目录项!!!
+            self.increase_size(disk_inode.size + DIRENT_SZ as u32, disk_inode, &mut fs);
+            // 写入新目录项
+            let dirent = DirEntry::new(new_name, old_inode_id);
+            disk_inode.write_at(
+                disk_inode.size as usize - DIRENT_SZ,
+                dirent.as_bytes(),
+                &self.block_device,
+            );
+        });
+        block_cache_sync_all();
+        true
+    }
+
+    /// Unlink a file under current inode
+    pub fn unlink(&self, name: &str) -> bool {
+        let inode = self.find(name);
+        if inode.is_none() {
+            return false;
+        }
+        let inode = inode.unwrap();
+        // 读取最后一个目录项
+        let last_dirent = self.read_disk_inode(|disk_inode: &DiskInode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let mut dirent = DirEntry::empty();
+            let _read = disk_inode.read_at(
+                (file_count - 1) * DIRENT_SZ,
+                dirent.as_bytes_mut(),
+                &self.block_device,
+            );
+            assert_eq!(_read, DIRENT_SZ,);
+            dirent
+        });
+        // 定位到要删除的目录项, 并用最后一个目录项覆盖它
+        let mut inode_id = u32::MAX;
+        self.modify_disk_inode(|disk_inode: &mut DiskInode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let mut dirent = DirEntry::empty();
+            for i in 0..file_count {
+                let _read = disk_inode.read_at(
+                    i * DIRENT_SZ,
+                    dirent.as_bytes_mut(),
+                    &self.block_device,
+                );
+                assert_eq!(_read, DIRENT_SZ);
+                if dirent.name() == name {
+                    // 找到要删除的目录项
+                    inode_id = dirent.inode_id() as u32;
+                    // 用最后一个目录项覆盖它
+                    disk_inode.write_at(
+                        i * DIRENT_SZ,
+                        last_dirent.as_bytes(),
+                        &self.block_device,
+                    );
+                    // 缩减目录项
+                    disk_inode.size -= DIRENT_SZ as u32;
+                    break;
+                }
+            }
+        });
+        // 未找到要删除的目录项
+        assert!(inode_id != u32::MAX);
+        // 检查该 inode 的链接数, 若为 0 则删除该 inode 的数据块
+        if self.link_count(inode_id) == 0 {
+            inode.clear();
+        }
+        // 同步数据到磁盘
+        block_cache_sync_all();
+        true
+    }
 }
