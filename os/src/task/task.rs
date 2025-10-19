@@ -1,7 +1,7 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{DEFAULT_PRIORITY, DEFAULT_STRIDE, TRAP_CONTEXT_BASE};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
@@ -71,6 +71,12 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Priority of the process
+    pub priority: usize,
+
+    /// Stride of the process
+    pub stride: usize,
 }
 
 impl TaskControlBlockInner {
@@ -135,6 +141,8 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    priority: DEFAULT_PRIORITY,
+                    stride: DEFAULT_STRIDE,
                 })
             },
         };
@@ -216,6 +224,8 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    priority: DEFAULT_PRIORITY,
+                    stride: DEFAULT_STRIDE,
                 })
             },
         });
@@ -229,6 +239,63 @@ impl TaskControlBlock {
         task_control_block
         // **** release child PCB
         // ---- release parent PCB
+    }
+
+    /// spawn a new process
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
+        let mut parent_inner = self.inner_exclusive_access();
+        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        let trap_cx_ppn = memory_set
+            .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
+            .unwrap()
+            .ppn();
+        // alloc a pid and a kernel stack in kernel space
+        let pid_handle = pid_alloc();
+        let kernel_stack = kstack_alloc();
+        let kernel_stack_top = kernel_stack.get_top();
+        // create new `fd_table`. Don't forget to add `stdin`/`stdout`/`stderr` to `new_fd_table`!!!
+        let new_fd_table: Vec<Option<Arc<dyn File + Send + Sync>>> = vec![
+            // 0 -> stdin
+            Some(Arc::new(Stdin)),
+            // 1 -> stdout
+            Some(Arc::new(Stdout)),
+            // 2 -> stderr
+            Some(Arc::new(Stdout)),
+        ];
+        let task_control_block = Arc::new(TaskControlBlock {
+            pid: pid_handle,
+            kernel_stack,
+            inner: unsafe {
+                UPSafeCell::new(TaskControlBlockInner {
+                    trap_cx_ppn,
+                    base_size: user_sp,
+                    task_cx: TaskContext::goto_trap_return(kernel_stack_top),
+                    task_status: TaskStatus::Ready,
+                    memory_set,
+                    parent: Some(Arc::downgrade(self)),
+                    children: Vec::new(),
+                    exit_code: 0,
+                    fd_table: new_fd_table,
+                    heap_bottom: user_sp,
+                    program_brk: user_sp,
+                    priority: DEFAULT_PRIORITY,
+                    stride: DEFAULT_STRIDE,
+                })
+            },
+        });
+        // add child
+        parent_inner.children.push(task_control_block.clone());
+        // initialize trap_cx
+        let trap_cx = task_control_block.inner_exclusive_access().get_trap_cx();
+        *trap_cx = TrapContext::app_init_context(
+            entry_point,
+            user_sp,
+            KERNEL_SPACE.exclusive_access().token(),
+            kernel_stack_top,
+            trap_handler as usize,
+        );
+        // return
+        task_control_block
     }
 
     /// get pid of process
@@ -260,6 +327,14 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+
+    /// set priority of process.
+    pub fn set_priority(&self, priority: usize) {
+        // 确保优先级在合理范围内
+        assert!(priority >= 2);
+        let mut inner = self.inner_exclusive_access();
+        inner.priority = priority;
     }
 }
 
