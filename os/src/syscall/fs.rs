@@ -82,18 +82,24 @@ pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
     let task = current_task().unwrap();
     let task_inner = task.inner_exclusive_access();
 
+    // 检查 fd 合法性
     if _fd >= task_inner.fd_table.len() {
         return -1;
     }
+
     if let Some(file) = &task_inner.fd_table[_fd] {
+        // 读取文件状态 stat
         let stat = file.state();
+        // 将 stat 转成字节流
         let src = unsafe {
             core::slice::from_raw_parts(
                 &stat as *const Stat as *const u8,
                 core::mem::size_of::<Stat>(),
             )
         };
+        // 将应用地址空间中的一段缓冲区 _st 转化为在内核地址空间直接读写的字节切片向量 bufs
         let bufs = translated_byte_buffer(token, _st as *const u8, core::mem::size_of::<Stat>());
+        // 将 src 分批次复制到 bufs 中
         let mut offset = 0;
         for buf in bufs {
             let len = core::cmp::min(buf.len(), src.len() - offset);
@@ -112,9 +118,11 @@ pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
     let token = current_user_token();
     let old_name = translated_str(token, _old_name);
     let new_name = translated_str(token, _new_name);
+    // 检查文件名合法性
     if old_name.is_empty() || new_name.is_empty() || old_name == new_name {
         return -1;
     }
+    // 执行 link 操作
     match link_file(old_name.as_str(), new_name.as_str()) {
         true => 0,
         false => -1,
@@ -126,9 +134,11 @@ pub fn sys_unlinkat(_name: *const u8) -> isize {
     trace!("kernel:pid[{}] sys_unlinkat", current_task().unwrap().pid.0);
     let token = current_user_token();
     let name = translated_str(token, _name);
+    // 检查文件名合法性
     if name.is_empty() {
         return -1;
     }
+    // 执行 unlink 操作
     match unlink_file(name.as_str()) {
         true => 0,
         false => -1,

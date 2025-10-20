@@ -202,6 +202,7 @@ impl Inode {
     /// Count of links to this inode
     pub fn link_count(&self, inode_id: u32) -> usize {
         let _fs = self.fs.lock();
+        // 链接计数器
         let mut count = 0;
         self.read_disk_inode(|disk_inode| {
             // assert it is a directory
@@ -254,27 +255,25 @@ impl Inode {
 
     /// Unlink a file under current inode
     pub fn unlink(&self, name: &str) -> bool {
+        // 获取 inode
         let inode = self.find(name);
         if inode.is_none() {
             return false;
         }
         let inode = inode.unwrap();
-        // 读取最后一个目录项
-        let last_dirent = self.read_disk_inode(|disk_inode: &DiskInode| {
-            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
-            let mut dirent = DirEntry::empty();
-            let _read = disk_inode.read_at(
-                (file_count - 1) * DIRENT_SZ,
-                dirent.as_bytes_mut(),
-                &self.block_device,
-            );
-            assert_eq!(_read, DIRENT_SZ,);
-            dirent
-        });
         // 定位到要删除的目录项, 并用最后一个目录项覆盖它
         let mut inode_id = u32::MAX;
         self.modify_disk_inode(|disk_inode: &mut DiskInode| {
             let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            // 读取最后一个目录项
+            let mut last_dirent = DirEntry::empty();
+            let _read = disk_inode.read_at(
+                (file_count - 1) * DIRENT_SZ,
+                last_dirent.as_bytes_mut(),
+                &self.block_device,
+            );
+            assert_eq!(_read, DIRENT_SZ,);
+            // 遍历目录项, 找到要删除的目录项, 并用最后一个目录项覆盖它
             let mut dirent = DirEntry::empty();
             for i in 0..file_count {
                 let _read = disk_inode.read_at(
