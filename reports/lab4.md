@@ -18,3 +18,13 @@
 
 - `ROOT_INODE` 是整个文件系统的根目录, 所有文件访问都必须从 `ROOT_INODE` 开始. 
 - 若 `ROOT_INODE` 损坏, 无法通过文件名访问对应的文件, 文件数据本身可能完好.
+
+## 其他问题
++ 提交代码到 Github, 发现 Actions 无法构建 cargo-binutils.
+    + ![problem](./problem.png)
++ 此构建失败是由一个传递性依赖的最低支持 Rust 版本冲突引起的. `cargo-binutils 0.4.0` → `toml ^0.8.8` (resolving to `0.8.23`) → `indexmap ^2.0.0 `(resolving to `2.12.0`). `indexmap 2.12.0` 的最低支持 Rust 版本为 `1.82`，而我们的环境为 `1.80.0-nightly`，不满足其要求. 使用 `cargo install cargo-binutils` 时加上 `--locked` 标志可强制 Cargo 遵循 `Cargo.lock` 文件的要求，使用 `indexmap 2.6.0`，从而解决此冲突.
+    + [cargo-binutils](https://docs.rs/crate/cargo-binutils/0.4.0)
+    + [Cargo.lock](https://docs.rs/crate/cargo-binutils/0.4.0/source/Cargo.lock)
++ 为修复此问题, 向 `rCore-Tutorial-Checker` 提交 PR.
+    + [[fix] add --locked flag to cargo install cargo-binutils](https://github.com/LearningOS/rCore-Tutorial-Checker/pull/1)
+    + ![PR](./pr.png)
