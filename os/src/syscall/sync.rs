@@ -120,12 +120,21 @@ pub fn sys_semaphore_create(res_count: usize) -> isize {
         .map(|(id, _)| id)
     {
         process_inner.semaphore_list[id] = Some(Arc::new(Semaphore::new(res_count)));
+        // Update available vector for deadlock detector
+        if process_inner.enable_deadlock_detection {
+            process_inner.semaphore_deadlock_detector.update_available(id, res_count as isize);
+        }
         id
     } else {
         process_inner
             .semaphore_list
             .push(Some(Arc::new(Semaphore::new(res_count))));
-        process_inner.semaphore_list.len() - 1
+        let sem_id = process_inner.semaphore_list.len() - 1;
+        // Update available vector for deadlock detector
+        if process_inner.enable_deadlock_detection {
+            process_inner.semaphore_deadlock_detector.update_available(sem_id, res_count as isize);
+        }
+        sem_id
     };
     id as isize
 }
@@ -147,6 +156,14 @@ pub fn sys_semaphore_up(sem_id: usize) -> isize {
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
     drop(process_inner);
     sem.up();
+    // Update available vector and allocation matrix for deadlock detector
+    let mut process_inner = process.inner_exclusive_access();
+    if process_inner.enable_deadlock_detection {
+        let tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
+        process_inner.semaphore_deadlock_detector.update_available(sem_id, 1);
+        process_inner.semaphore_deadlock_detector.update_allocation(tid, sem_id, -1);
+    }
+    drop(process_inner);
     0
 }
 /// semaphore down syscall
@@ -163,10 +180,33 @@ pub fn sys_semaphore_down(sem_id: usize) -> isize {
             .tid
     );
     let process = current_process();
-    let process_inner = process.inner_exclusive_access();
+    let mut process_inner = process.inner_exclusive_access();
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
+    // Check Deadlock !!!
+    if process_inner.enable_deadlock_detection {
+        let tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
+        // Update need matrix for deadlock detector
+        process_inner.semaphore_deadlock_detector.update_need(tid, sem_id, 1);
+        // Check safety
+        if !process_inner.semaphore_deadlock_detector.check_safety() {
+            log::debug!("Deadlock Detector: Deadlock Detected for tid: {}, sem_id: {}", tid, sem_id);
+            // Deadlock detected, roll back the state
+            process_inner.semaphore_deadlock_detector.update_need(tid, sem_id, -1);
+            return -0xdead;
+        }
+        log::debug!("Deadlock Detector: No Deadlock Detected for tid: {}, sem_id: {}", tid, sem_id);
+    }
     drop(process_inner);
     sem.down();
+    // Update available vector, need and allocation matrix for deadlock detector
+    let mut process_inner = process.inner_exclusive_access();
+    if process_inner.enable_deadlock_detection {
+        let tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
+        process_inner.semaphore_deadlock_detector.update_available(sem_id, -1);
+        process_inner.semaphore_deadlock_detector.update_need(tid, sem_id, -1);
+        process_inner.semaphore_deadlock_detector.update_allocation(tid, sem_id, 1);
+    }
+    drop(process_inner);
     0
 }
 /// condvar create syscall
@@ -246,6 +286,9 @@ pub fn sys_condvar_wait(condvar_id: usize, mutex_id: usize) -> isize {
 ///
 /// YOUR JOB: Implement deadlock detection, but might not all in this syscall
 pub fn sys_enable_deadlock_detect(_enabled: usize) -> isize {
-    trace!("kernel: sys_enable_deadlock_detect NOT IMPLEMENTED");
-    -1
+    trace!("kernel: sys_enable_deadlock_detect");
+    let process = current_process();
+    let mut process_inner = process.inner_exclusive_access();
+    process_inner.enable_deadlock_detection = _enabled != 0;
+    0
 }

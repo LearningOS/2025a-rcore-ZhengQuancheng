@@ -1,10 +1,11 @@
 use crate::{
     fs::{open_file, OpenFlags},
-    mm::{translated_ref, translated_refmut, translated_str},
+    mm::{translated_byte_buffer, translated_ref, translated_refmut, translated_str},
     task::{
         current_process, current_task, current_user_token, exit_current_and_run_next, pid2process,
         suspend_current_and_run_next, SignalFlags,
-    },
+    }, 
+    timer::get_time_us,
 };
 use alloc::{string::String, sync::Arc, vec::Vec};
 
@@ -152,11 +153,34 @@ pub fn sys_kill(pid: usize, signal: u32) -> isize {
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().process.upgrade().unwrap().getpid()
+    trace!("kernel:pid[{}] sys_get_time", current_task().unwrap().process.upgrade().unwrap().getpid());
+    // 获取当前时间
+    let us = get_time_us();
+    let tv = TimeVal { // ch3
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+    // 将应用地址空间中的一段缓冲区 _ts 转化为在内核地址空间直接读写的字节切片向量 bufs
+    let bufs = translated_byte_buffer(
+        current_user_token(),
+        _ts as *const u8,
+        core::mem::size_of::<TimeVal>()
     );
-    -1
+    // 将 tv 转为字节数组, 方便数据复制
+    let src = unsafe {
+        core::slice::from_raw_parts(
+            &tv as *const TimeVal as *const u8,
+            core::mem::size_of::<TimeVal>(),
+        )
+    };
+    // 将 src 分批次复制到 bufs 中
+    let mut offset = 0;
+    for buf in bufs {
+        let len = core::cmp::min(buf.len(), src.len() - offset);
+        buf[..len].copy_from_slice(&src[offset..offset + len]);
+        offset += len;
+    }
+    0
 }
 
 /// mmap syscall
