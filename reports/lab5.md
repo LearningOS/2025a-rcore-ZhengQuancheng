@@ -1,4 +1,4 @@
-# Lab1
+# Lab5
 
 ## 编程作业
 + 按照题目的提示, 即可实现死锁检测 `DeadlockDetector`, 主要代码在 `os/src/sync/deadlock_detector.rs`. 对 `mutex` 和 `semaphore` 操作的 `syscall` 中调用 `DeadlockDetector` 的接口. 
