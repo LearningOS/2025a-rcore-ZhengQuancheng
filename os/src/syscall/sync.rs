@@ -49,10 +49,19 @@ pub fn sys_mutex_create(blocking: bool) -> isize {
         .map(|(id, _)| id)
     {
         process_inner.mutex_list[id] = mutex;
+        // Update available vector for deadlock detector
+        if process_inner.enable_deadlock_detection {
+            process_inner.mutex_deadlock_detector.update_available(id, 1);
+        }
         id as isize
     } else {
         process_inner.mutex_list.push(mutex);
-        process_inner.mutex_list.len() as isize - 1
+        let mutex_id = process_inner.mutex_list.len() - 1;
+        // Update available vector for deadlock detector
+        if process_inner.enable_deadlock_detection {
+            process_inner.mutex_deadlock_detector.update_available(mutex_id, 1);
+        }
+        mutex_id as isize
     }
 }
 /// mutex lock syscall
@@ -69,11 +78,36 @@ pub fn sys_mutex_lock(mutex_id: usize) -> isize {
             .tid
     );
     let process = current_process();
-    let process_inner = process.inner_exclusive_access();
+    let mut process_inner = process.inner_exclusive_access();
     let mutex = Arc::clone(process_inner.mutex_list[mutex_id].as_ref().unwrap());
+    // Check Deadlock !!!
+    if process_inner.enable_deadlock_detection {
+        let tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
+        // Update need matrix for deadlock detector
+        process_inner.mutex_deadlock_detector.update_need(tid, mutex_id, 1);
+        // Check safety
+        if !process_inner.mutex_deadlock_detector.check_safety() {
+            log::debug!("Deadlock Detector: Deadlock Detected for tid: {}, mutex_id: {}", tid, mutex_id);
+            // Deadlock detected, roll back the state
+            process_inner.mutex_deadlock_detector.update_need(tid, mutex_id, -1);
+            return -0xdead;
+        }
+        log::debug!("Deadlock Detector: No Deadlock Detected for tid: {}, mutex_id: {}", tid, mutex_id);
+    }
     drop(process_inner);
     drop(process);
     mutex.lock();
+    // Update available vector, need and allocation matrix for deadlock detector
+    let process = current_process();
+    let mut process_inner = process.inner_exclusive_access();
+    if process_inner.enable_deadlock_detection {
+        let tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
+        process_inner.mutex_deadlock_detector.update_available(mutex_id, -1);
+        process_inner.mutex_deadlock_detector.update_need(tid, mutex_id, -1);
+        process_inner.mutex_deadlock_detector.update_allocation(tid, mutex_id, 1);
+    }
+    drop(process_inner);
+    drop(process);
     0
 }
 /// mutex unlock syscall
@@ -95,6 +129,16 @@ pub fn sys_mutex_unlock(mutex_id: usize) -> isize {
     drop(process_inner);
     drop(process);
     mutex.unlock();
+    // Update available vector and allocation matrix for deadlock detector
+    let process = current_process();
+    let mut process_inner = process.inner_exclusive_access();
+    if process_inner.enable_deadlock_detection {
+        let tid = current_task().unwrap().inner_exclusive_access().res.as_ref().unwrap().tid;
+        process_inner.mutex_deadlock_detector.update_available(mutex_id, 1);
+        process_inner.mutex_deadlock_detector.update_allocation(tid, mutex_id, -1);
+    }
+    drop(process_inner);
+    drop(process);
     0
 }
 /// semaphore create syscall
